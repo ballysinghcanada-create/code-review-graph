@@ -47,3 +47,14 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Average True Range (Wilder smoothing)."""
     tr = true_range(df)
     return tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+
+def bollinger_bands(
+    series: pd.Series, period: int = 20, num_std: float = 2.0
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Bollinger Bands: (upper, middle, lower)."""
+    middle = sma(series, period)
+    std = series.rolling(window=period).std(ddof=0)
+    upper = middle + num_std * std
+    lower = middle - num_std * std
+    return upper, middle, lower

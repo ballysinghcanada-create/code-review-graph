@@ -8,6 +8,7 @@ import pandas as pd
 from samfx.backtester import Backtester
 from samfx.config import BacktestConfig, StrategyConfig
 from samfx.data import generate_synthetic_ohlc
+from samfx.mean_reversion import MeanReversionStrategy, MeanReversionStrategyConfig
 from samfx.strategy import SamFxStrategy
 
 
@@ -36,12 +37,27 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--risk-pct", type=float, default=1.0, help="Risk per trade, percent")
     bt.add_argument("--spread-pips", type=float, default=1.0)
     bt.add_argument("--pip-size", type=float, default=0.0001, help="0.01 for JPY pairs")
+    bt.add_argument(
+        "--strategy",
+        choices=["trend", "mean-reversion"],
+        default="trend",
+        help="'trend' is the EMA-crossover strategy; 'mean-reversion' targets a high win "
+        "rate via tight TP / wide SL (see samfx/README.md before trusting its win rate)",
+    )
+    # trend strategy params
     bt.add_argument("--fast-ema", type=int, default=12)
     bt.add_argument("--slow-ema", type=int, default=26)
     bt.add_argument("--rsi-period", type=int, default=14)
     bt.add_argument("--atr-period", type=int, default=14)
     bt.add_argument("--atr-sl-mult", type=float, default=1.5)
     bt.add_argument("--atr-tp-mult", type=float, default=3.0)
+    # mean-reversion strategy params
+    bt.add_argument("--bb-period", type=int, default=20)
+    bt.add_argument("--bb-std", type=float, default=2.0)
+    bt.add_argument("--mr-rsi-oversold", type=float, default=30.0)
+    bt.add_argument("--mr-rsi-overbought", type=float, default=70.0)
+    bt.add_argument("--mr-tp-atr-mult", type=float, default=0.55)
+    bt.add_argument("--mr-sl-atr-mult", type=float, default=3.4)
 
     return parser
 
@@ -53,14 +69,31 @@ def run_backtest(args: argparse.Namespace) -> int:
 
     df = generate_synthetic_ohlc() if args.demo else _load_ohlc(args.data)
 
-    strategy_cfg = StrategyConfig(
-        fast_ema=args.fast_ema,
-        slow_ema=args.slow_ema,
-        rsi_period=args.rsi_period,
-        atr_period=args.atr_period,
-        atr_sl_mult=args.atr_sl_mult,
-        atr_tp_mult=args.atr_tp_mult,
-    )
+    if args.strategy == "mean-reversion":
+        strategy = MeanReversionStrategy(
+            MeanReversionStrategyConfig(
+                bb_period=args.bb_period,
+                bb_std=args.bb_std,
+                rsi_period=args.rsi_period,
+                rsi_oversold=args.mr_rsi_oversold,
+                rsi_overbought=args.mr_rsi_overbought,
+                atr_period=args.atr_period,
+                tp_atr_mult=args.mr_tp_atr_mult,
+                sl_atr_mult=args.mr_sl_atr_mult,
+            )
+        )
+    else:
+        strategy = SamFxStrategy(
+            StrategyConfig(
+                fast_ema=args.fast_ema,
+                slow_ema=args.slow_ema,
+                rsi_period=args.rsi_period,
+                atr_period=args.atr_period,
+                atr_sl_mult=args.atr_sl_mult,
+                atr_tp_mult=args.atr_tp_mult,
+            )
+        )
+
     backtest_cfg = BacktestConfig(
         initial_balance=args.initial_balance,
         risk_per_trade_pct=args.risk_pct,
@@ -68,13 +101,17 @@ def run_backtest(args: argparse.Namespace) -> int:
         pip_size=args.pip_size,
     )
 
-    backtester = Backtester(strategy=SamFxStrategy(strategy_cfg), config=backtest_cfg)
+    backtester = Backtester(strategy=strategy, config=backtest_cfg)
     report = backtester.run(df)
 
-    print(f"Samfx backtest — {args.pair} ({len(df)} bars)")
+    print(f"Samfx backtest [{args.strategy}] — {args.pair} ({len(df)} bars)")
     print("-" * 40)
     for key, value in report.summary().items():
-        print(f"{key:>18}: {value}")
+        print(f"{key:>20}: {value}")
+    if args.strategy == "mean-reversion":
+        print("-" * 40)
+        print("High win rate here comes from a small TP vs. a wide SL —")
+        print("check expectancy_per_trade and profit_factor, not just win_rate_pct.")
     return 0
 
 

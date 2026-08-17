@@ -1,4 +1,4 @@
-"""Bar-by-bar backtester for SamFxStrategy signals.
+"""Bar-by-bar backtester for any Samfx strategy's signals.
 
 Signals are generated once (vectorized), then simulated sequentially:
 entries fill at the *next* bar's open (no lookahead), and each open trade
@@ -7,11 +7,19 @@ Only one position is open at a time.
 """
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import pandas as pd
 
 from samfx.config import BacktestConfig
 from samfx.strategy import LONG, SamFxStrategy
+
+
+class SignalGenerator(Protocol):
+    """Any strategy that turns OHLC bars into signal/stop_loss/take_profit
+    columns can be backtested — see SamFxStrategy and MeanReversionStrategy."""
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame: ...
 
 
 @dataclass
@@ -68,6 +76,28 @@ class PerformanceReport:
         return gross_profit / gross_loss
 
     @property
+    def average_win(self) -> float:
+        wins = [t.pnl for t in self.trades if t.pnl > 0]
+        return sum(wins) / len(wins) if wins else 0.0
+
+    @property
+    def average_loss(self) -> float:
+        """Average losing trade, as a positive magnitude."""
+        losses = [-t.pnl for t in self.trades if t.pnl < 0]
+        return sum(losses) / len(losses) if losses else 0.0
+
+    @property
+    def expectancy(self) -> float:
+        """Expected P&L per trade: win_rate * avg_win - loss_rate * avg_loss.
+
+        A high win_rate with a small avg_win and a large avg_loss can still
+        yield a negative expectancy — win rate alone does not imply
+        profitability.
+        """
+        loss_rate = 1 - self.win_rate
+        return self.win_rate * self.average_win - loss_rate * self.average_loss
+
+    @property
     def max_drawdown_pct(self) -> float:
         peak = float("-inf")
         max_dd = 0.0
@@ -84,6 +114,9 @@ class PerformanceReport:
             "losses": self.losses,
             "win_rate_pct": round(self.win_rate * 100, 2),
             "profit_factor": round(self.profit_factor, 2),
+            "expectancy_per_trade": round(self.expectancy, 2),
+            "average_win": round(self.average_win, 2),
+            "average_loss": round(self.average_loss, 2),
             "total_return_pct": round(self.total_return_pct, 2),
             "max_drawdown_pct": round(self.max_drawdown_pct, 2),
             "final_balance": round(self.final_balance, 2),
@@ -92,7 +125,7 @@ class PerformanceReport:
 
 @dataclass
 class Backtester:
-    strategy: SamFxStrategy = field(default_factory=SamFxStrategy)
+    strategy: SignalGenerator = field(default_factory=SamFxStrategy)
     config: BacktestConfig = field(default_factory=BacktestConfig)
 
     def run(self, df: pd.DataFrame) -> PerformanceReport:
